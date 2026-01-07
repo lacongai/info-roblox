@@ -12,9 +12,10 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY", "henntaiiz_super").strip()
 AUTHOR = "@henntaiiz"
 
+
 app = FastAPI(
     title="Roblox User Info API",
-    version="1.0",
+    version="1.1",
     description="Secure Roblox User Information API"
 )
 
@@ -55,12 +56,10 @@ async def get_user_id(client, username: str):
 async def get_user_details(client, user_id: int):
     result = {}
 
-    # Basic info
     basic = await fetch(client, f"https://users.roblox.com/v1/users/{user_id}")
     result["basicInfo"] = basic
     result["accountCreationDate"] = basic.get("created") if basic else None
 
-    # Avatar
     avatar = await fetch(
         client,
         f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
@@ -72,25 +71,21 @@ async def get_user_details(client, user_id: int):
         else None
     )
 
-    # Friends
     friends = await fetch(client, f"https://friends.roblox.com/v1/users/{user_id}/friends")
     result["friendCount"] = len(friends.get("data", [])) if friends else 0
 
-    # Followers
     followers = await fetch(
         client,
         f"https://friends.roblox.com/v1/users/{user_id}/followers/count"
     )
     result["followersCount"] = followers.get("count", 0) if followers else 0
 
-    # Premium
     premium = await fetch(
         client,
         f"https://premiumfeatures.roblox.com/v1/users/{user_id}/memberships"
     )
     result["isPremium"] = bool(premium and premium.get("premiumMembership"))
 
-    # Presence
     presence = await fetch(
         client,
         "https://presence.roblox.com/v1/presence/users",
@@ -103,28 +98,24 @@ async def get_user_details(client, user_id: int):
         else None
     )
 
-    # Username history
     history = await fetch(
         client,
         f"https://users.roblox.com/v1/users/{user_id}/username-history"
     )
     result["usernameHistory"] = history.get("data", []) if history else []
 
-    # Groups
     groups = await fetch(
         client,
         f"https://groups.roblox.com/v1/users/{user_id}/groups/roles"
     )
     result["groups"] = groups.get("data", []) if groups else []
 
-    # Badges
     badges = await fetch(
         client,
         f"https://badges.roblox.com/v1/users/{user_id}/badges?limit=10&sortOrder=Desc"
     )
     result["badges"] = badges.get("data", []) if badges else []
 
-    # Favorite games
     fav = await fetch(
         client,
         f"https://games.roblox.com/v1/users/{user_id}/favorite/games?limit=10"
@@ -137,38 +128,37 @@ async def get_user_details(client, user_id: int):
 
 
 # ======================================================
-# VERIFY API KEY (HEADER / QUERY / PATH)
+# VERIFY API KEY (AUTO DETECT)
 # ======================================================
-def verify_key(request: Request, path_key: str | None = None):
-    key = (
-        request.headers.get("x-api-key")
-        or request.query_params.get("key")
-        or path_key
-    )
-
-    if not key or key.strip() != API_KEY:
-        return False
-
-    return True
+def verify_key(key: str) -> bool:
+    return key.strip() == API_KEY
 
 
 # ======================================================
-# MAIN API ENDPOINT
+# MAIN API ENDPOINT (SUPPORT 2 URL TYPES)
 # ======================================================
-@app.get("/check/{api_key}/{username}")
+@app.get("/check/{param1}/{param2}")
 async def check_roblox_user(
     request: Request,
-    api_key: str = Path(..., description="API Key"),
-    username: str = Path(..., description="Roblox Username")
+    param1: str = Path(...),
+    param2: str = Path(...)
 ):
-    if not verify_key(request, api_key):
+    # Auto detect which is API key
+    if verify_key(param1):
+        api_key = param1
+        username = param2
+    elif verify_key(param2):
+        api_key = param2
+        username = param1
+    else:
         return JSONResponse(
             status_code=401,
             content={
-                "Trạng thái": "lỗi",
-                "Tác giả": AUTHOR,
-                "message": "API khóa không hợp lệ"
-            }
+                "status": "error",
+                "author": AUTHOR,
+                "message": "Invalid API key"
+            },
+            indent=2
         )
 
     async with httpx.AsyncClient() as client:
@@ -177,19 +167,23 @@ async def check_roblox_user(
             return JSONResponse(
                 status_code=404,
                 content={
-                    "Trạng thái": "lỗi",
-                    "Tác giả": AUTHOR,
-                    "message": "Không tìm thấy người dùng Roblox này."
-                }
+                    "status": "error",
+                    "author": AUTHOR,
+                    "message": "Roblox user not found"
+                },
+                indent=2
             )
 
         data = await get_user_details(client, user["id"])
 
-    return {
-        "Trạng thái": "thành công",
-        "Tác giả": AUTHOR,
-        "data": data
-    }
+    return JSONResponse(
+        content={
+            "status": "success",
+            "author": AUTHOR,
+            "data": data
+        },
+        indent=2
+    )
 
 
 # ======================================================
@@ -197,7 +191,13 @@ async def check_roblox_user(
 # ======================================================
 @app.get("/")
 async def root():
-    return {
-        "message": "Roblox Info API is running",
-        "usage": "/check/{api_key}/{username} or ?key=API_KEY&username=name"
-    }
+    return JSONResponse(
+        content={
+            "message": "Roblox Info API is running",
+            "usage": [
+                "/check/API_KEY/USERNAME",
+                "/check/USERNAME/API_KEY"
+            ]
+        },
+        indent=2
+    )
