@@ -1,67 +1,64 @@
-from fastapi import FastAPI, Query, Header
+from fastapi import FastAPI, Request, Path
 from fastapi.responses import JSONResponse
 import httpx
-import asyncio
 import os
 from dotenv import load_dotenv
 
-# =========================
+# ======================================================
 # LOAD ENV
-# =========================
+# ======================================================
 load_dotenv()
-API_KEY = os.getenv("API_KEY")
+
+API_KEY = os.getenv("API_KEY", "henntaiiz_super").strip()
 AUTHOR = "@henntaiiz"
 
 app = FastAPI(
     title="Roblox User Info API",
-    version="1.0-secure"
+    version="1.0",
+    description="Secure Roblox User Information API"
 )
 
-# =========================
-# API KEY CHECK
-# =========================
-def verify_api_key(x_api_key: str):
-    return x_api_key == API_KEY
-
-
-# =========================
-# FETCH ROBLOX API
-# =========================
-async def fetch(client, url, method="GET", payload=None):
+# ======================================================
+# HELPER: FETCH ROBLOX API
+# ======================================================
+async def fetch(client: httpx.AsyncClient, url: str, method="GET", payload=None):
     try:
         if method == "POST":
-            res = await client.post(url, json=payload, timeout=10)
+            r = await client.post(url, json=payload, timeout=15)
         else:
-            res = await client.get(url, timeout=10)
+            r = await client.get(url, timeout=15)
 
-        if res.status_code != 200:
+        if r.status_code != 200:
             return None
 
-        return res.json()
-    except:
+        return r.json()
+    except Exception:
         return None
 
 
-# =========================
-# GET USER ID
-# =========================
-async def get_user_id(client, username):
+# ======================================================
+# GET USER ID BY USERNAME
+# ======================================================
+async def get_user_id(client, username: str):
     url = "https://users.roblox.com/v1/usernames/users"
-    payload = {"usernames": [username], "excludeBannedUsers": True}
-    r = await fetch(client, url, "POST", payload)
-    return r["data"][0] if r and r.get("data") else None
+    payload = {
+        "usernames": [username],
+        "excludeBannedUsers": True
+    }
+    data = await fetch(client, url, "POST", payload)
+    return data["data"][0] if data and data.get("data") else None
 
 
-# =========================
+# ======================================================
 # GET USER DETAILS
-# =========================
-async def get_user_details(client, user_id):
-    details = {}
+# ======================================================
+async def get_user_details(client, user_id: int):
+    result = {}
 
-    # Basic Info
+    # Basic info
     basic = await fetch(client, f"https://users.roblox.com/v1/users/{user_id}")
-    details["basicInfo"] = basic
-    details["accountCreationDate"] = basic.get("created") if basic else None
+    result["basicInfo"] = basic
+    result["accountCreationDate"] = basic.get("created") if basic else None
 
     # Avatar
     avatar = await fetch(
@@ -69,19 +66,29 @@ async def get_user_details(client, user_id):
         f"https://thumbnails.roblox.com/v1/users/avatar-headshot"
         f"?userIds={user_id}&size=150x150&format=Png&isCircular=false"
     )
-    details["avatar"] = avatar["data"][0]["imageUrl"] if avatar and avatar.get("data") else None
+    result["avatar"] = (
+        avatar["data"][0]["imageUrl"]
+        if avatar and avatar.get("data")
+        else None
+    )
 
     # Friends
     friends = await fetch(client, f"https://friends.roblox.com/v1/users/{user_id}/friends")
-    details["friendCount"] = len(friends.get("data", [])) if friends else 0
+    result["friendCount"] = len(friends.get("data", [])) if friends else 0
 
     # Followers
-    followers = await fetch(client, f"https://friends.roblox.com/v1/users/{user_id}/followers/count")
-    details["followersCount"] = followers.get("count", 0) if followers else 0
+    followers = await fetch(
+        client,
+        f"https://friends.roblox.com/v1/users/{user_id}/followers/count"
+    )
+    result["followersCount"] = followers.get("count", 0) if followers else 0
 
     # Premium
-    premium = await fetch(client, f"https://premiumfeatures.roblox.com/v1/users/{user_id}/memberships")
-    details["isPremium"] = bool(premium and premium.get("premiumMembership"))
+    premium = await fetch(
+        client,
+        f"https://premiumfeatures.roblox.com/v1/users/{user_id}/memberships"
+    )
+    result["isPremium"] = bool(premium and premium.get("premiumMembership"))
 
     # Presence
     presence = await fetch(
@@ -90,61 +97,77 @@ async def get_user_details(client, user_id):
         "POST",
         {"userIds": [user_id]}
     )
-    details["presence"] = presence["userPresences"][0] if presence and presence.get("userPresences") else None
+    result["presence"] = (
+        presence["userPresences"][0]
+        if presence and presence.get("userPresences")
+        else None
+    )
 
     # Username history
-    history = await fetch(client, f"https://users.roblox.com/v1/users/{user_id}/username-history")
-    details["usernameHistory"] = history.get("data", []) if history else []
+    history = await fetch(
+        client,
+        f"https://users.roblox.com/v1/users/{user_id}/username-history"
+    )
+    result["usernameHistory"] = history.get("data", []) if history else []
 
     # Groups
-    groups = await fetch(client, f"https://groups.roblox.com/v1/users/{user_id}/groups/roles")
-    details["groups"] = groups.get("data", []) if groups else []
+    groups = await fetch(
+        client,
+        f"https://groups.roblox.com/v1/users/{user_id}/groups/roles"
+    )
+    result["groups"] = groups.get("data", []) if groups else []
 
     # Badges
     badges = await fetch(
         client,
-        f"https://badges.roblox.com/v1/users/{user_id}/badges?sortOrder=Desc&limit=10"
+        f"https://badges.roblox.com/v1/users/{user_id}/badges?limit=10&sortOrder=Desc"
     )
-    details["badges"] = badges.get("data", []) if badges else []
+    result["badges"] = badges.get("data", []) if badges else []
 
     # Favorite games
-    favorites = await fetch(
+    fav = await fetch(
         client,
         f"https://games.roblox.com/v1/users/{user_id}/favorite/games?limit=10"
     )
-    details["favoriteGames"] = favorites.get("data", []) if favorites else []
+    result["favoriteGames"] = fav.get("data", []) if fav else []
 
-    # Created games (empty nếu không cần)
-    details["topGames"] = []
+    result["topGames"] = []
 
-    return details
+    return result
 
 
-# =========================
-# API ENDPOINT (SECURED)
-# =========================
-@app.get("/")
-async def roblox_lookup(
-    username: str = Query(None),
-    x_api_key: str = Header(None)
+# ======================================================
+# VERIFY API KEY (HEADER / QUERY / PATH)
+# ======================================================
+def verify_key(request: Request, path_key: str | None = None):
+    key = (
+        request.headers.get("x-api-key")
+        or request.query_params.get("key")
+        or path_key
+    )
+
+    if not key or key.strip() != API_KEY:
+        return False
+
+    return True
+
+
+# ======================================================
+# MAIN API ENDPOINT
+# ======================================================
+@app.get("/check/{api_key}/{username}")
+async def check_roblox_user(
+    request: Request,
+    api_key: str = Path(..., description="API Key"),
+    username: str = Path(..., description="Roblox Username")
 ):
-    if not verify_api_key(x_api_key):
+    if not verify_key(request, api_key):
         return JSONResponse(
             status_code=401,
             content={
-                "status": "error",
-                "author": AUTHOR,
-                "message": "Invalid API Key"
-            }
-        )
-
-    if not username:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "author": AUTHOR,
-                "message": "Vui lòng cung cấp username."
+                "Trạng thái": "lỗi",
+                "Tác giả": AUTHOR,
+                "message": "API khóa không hợp lệ"
             }
         )
 
@@ -154,8 +177,8 @@ async def roblox_lookup(
             return JSONResponse(
                 status_code=404,
                 content={
-                    "status": "error",
-                    "author": AUTHOR,
+                    "Trạng thái": "lỗi",
+                    "Tác giả": AUTHOR,
                     "message": "Không tìm thấy người dùng Roblox này."
                 }
             )
@@ -163,7 +186,18 @@ async def roblox_lookup(
         data = await get_user_details(client, user["id"])
 
     return {
-        "status": "success",
-        "author": AUTHOR,
+        "Trạng thái": "thành công",
+        "Tác giả": AUTHOR,
         "data": data
+    }
+
+
+# ======================================================
+# ROOT (HEALTH CHECK)
+# ======================================================
+@app.get("/")
+async def root():
+    return {
+        "message": "Roblox Info API is running",
+        "usage": "/check/{api_key}/{username} or ?key=API_KEY&username=name"
     }
